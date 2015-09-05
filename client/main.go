@@ -26,18 +26,17 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Bluek404/Stepladder/aestcp"
 
 	"github.com/Unknwon/goconfig"
 )
@@ -59,19 +58,6 @@ const (
 var ipv4Reg = regexp.MustCompile(`(?:[0-9]+\.){3}[0-9]+`)
 
 func main() {
-	// 读取证书文件
-	rootPEM, err := ioutil.ReadFile("cert.pem")
-	if err != nil {
-		log.Println("读取 cert.pem 出错:", err, "请检查文件是否存在")
-		return
-	}
-	roots := x509.NewCertPool()
-	ok := roots.AppendCertsFromPEM(rootPEM)
-	if !ok {
-		log.Println("证书分析失败，请检查证书文件是否正确")
-		return
-	}
-
 	// 加载配置文件
 	cfg, err := goconfig.LoadConfigFile("client.ini")
 	if err != nil {
@@ -116,9 +102,6 @@ func main() {
 		serverHost: serverHost,
 		serverPort: serverPort,
 		key:        key,
-		conf: &tls.Config{
-			RootCAs: roots,
-		},
 	}
 
 	// 登录
@@ -204,7 +187,6 @@ type serve struct {
 	session           []byte
 	nextUpdateTime    uint16
 	updateSessionLock bool
-	conf              *tls.Config
 }
 
 func (s *serve) updateSessionLoop() {
@@ -245,7 +227,7 @@ func (s *serve) updateSession() error {
 		return err
 	}
 
-	conn, err := tls.Dial("tcp", s.serverHost+":"+s.serverPort, s.conf)
+	conn, err := aestcp.Dial("tcp", s.serverHost+":"+s.serverPort, []byte(s.key))
 	if err != nil {
 		return err
 	}
@@ -353,7 +335,7 @@ func (s *serve) handleConnection(conn net.Conn) {
 func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 	log.Println(conn.RemoteAddr(), "<=tcp=>", host+":"+strconv.Itoa(int(port)), "[+]")
 	// 与服务端建立链接
-	pconn, err := tls.Dial("tcp", s.serverHost+":"+s.serverPort, s.conf)
+	pconn, err := aestcp.Dial("tcp", s.serverHost+":"+s.serverPort, []byte(s.key))
 	if err != nil {
 		log.Println("连接服务端失败:", err)
 		conn.Close()
@@ -464,7 +446,7 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 	log.Println(conn.RemoteAddr(), "<=udp=>", "ALL", "[+]")
 	// 与服务端建立链接
-	pconn, err := tls.Dial("tcp", s.serverHost+":"+s.serverPort, s.conf)
+	pconn, err := aestcp.Dial("tcp", s.serverHost+":"+s.serverPort, []byte(s.key))
 	if err != nil {
 		log.Println("连接服务端失败:", err)
 		conn.Close()

@@ -26,7 +26,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/binary"
 	"io"
 	"log"
@@ -34,6 +33,8 @@ import (
 	"net"
 	"strconv"
 	"time"
+
+	"github.com/Bluek404/Stepladder/aestcp"
 
 	"github.com/Unknwon/goconfig"
 )
@@ -67,27 +68,15 @@ func main() {
 		}
 	}
 
-	// 读取公私钥
-	cer, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
 	// 监听端口
-	ln, err := tls.Listen("tcp", ":"+port, &tls.Config{
-		Certificates: []tls.Certificate{cer},
-	})
+	ln, err := aestcp.Listen("tcp", ":"+port, []byte(key))
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	defer ln.Close()
 
-	s := &serve{
-		key:     key,
-		clients: make(map[string]uint),
-	}
+	s := &serve{key: key}
 
 	// 加载完成后输出配置信息
 	log.Println("|>>>>>>>>>>>>>>>|<<<<<<<<<<<<<<<|")
@@ -146,8 +135,6 @@ type serve struct {
 	key            string
 	session        [64]byte
 	nextUpdateTime int64
-	clients        map[string]uint
-	keepit         map[string]chan bool
 }
 
 func (s *serve) genSession() {
