@@ -322,14 +322,14 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 	}
 
 	go func() {
-		io.Copy(conn, pconn)
+		Copy(conn, pconn)
 		conn.Close()
 		pconn.Close()
 		log.Println(conn.RemoteAddr(), "==tcp=>", host, "[√]")
 	}()
 
 	go func() {
-		io.Copy(pconn, conn)
+		Copy(pconn, conn)
 		conn.Close()
 		pconn.Close()
 		log.Println(conn.RemoteAddr(), "<=tcp==", host, "[√]")
@@ -595,4 +595,33 @@ func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 		uconn.Close()
 		exit <- true
 	}()
+}
+
+func Copy(dst io.Writer, src io.Reader) (written int64, err error) {
+	buf := make([]byte, 32*1024)
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[0:nr])
+			if nw > 0 {
+				written += int64(nw)
+			}
+			if ew != nil {
+				err = ew
+				break
+			}
+			if nr != nw {
+				err = io.ErrShortWrite
+				break
+			}
+		}
+		if er == io.EOF {
+			break
+		}
+		if er != nil {
+			err = er
+			break
+		}
+	}
+	return written, err
 }

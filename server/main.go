@@ -148,7 +148,6 @@ func (s *serve) handleConnection(conn net.Conn) {
 		conn.Close()
 		return
 	}
-	log.Println(buf)
 	if buf[0] == 0 {
 		s.proxyTCP(conn)
 	} else {
@@ -223,13 +222,13 @@ func (s *serve) proxyTCP(conn net.Conn) {
 
 	// 两个conn互相传输信息
 	go func() {
-		io.Copy(conn, pconn)
+		Copy(conn, pconn)
 		conn.Close()
 		pconn.Close()
 		log.Println(conn.RemoteAddr(), "==tcp=>", url, "[√]")
 	}()
 	go func() {
-		io.Copy(pconn, conn)
+		Copy(pconn, conn)
 		pconn.Close()
 		conn.Close()
 		log.Println(conn.RemoteAddr(), "<=tcp==", url, "[√]")
@@ -358,4 +357,33 @@ func (s *serve) proxyUDP(conn net.Conn) {
 		conn.Close()
 		exit <- true
 	}()
+}
+
+func Copy(dst io.Writer, src io.Reader) (written int64, err error) {
+	buf := make([]byte, 32*1024)
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[0:nr])
+			if nw > 0 {
+				written += int64(nw)
+			}
+			if ew != nil {
+				err = ew
+				break
+			}
+			if nr != nw {
+				err = io.ErrShortWrite
+				break
+			}
+		}
+		if er == io.EOF {
+			break
+		}
+		if er != nil {
+			err = er
+			break
+		}
+	}
+	return written, err
 }
