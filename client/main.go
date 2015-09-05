@@ -27,7 +27,6 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"io"
 	"log"
 	"net"
@@ -41,7 +40,7 @@ import (
 	"github.com/Unknwon/goconfig"
 )
 
-const VERSION = "2.1.0"
+const VERSION = "3.0.0"
 
 const (
 	verSocks5 = 0x05
@@ -103,14 +102,6 @@ func main() {
 		serverPort: serverPort,
 		key:        key,
 	}
-
-	// 登录
-	if err = s.updateSession(); err != nil {
-		log.Println("与服务器连接失败:", err)
-		return
-	}
-	log.Println("登录成功,服务器连接完毕")
-	go s.updateSessionLoop()
 
 	for {
 		conn, err := ln.Accept()
@@ -181,93 +172,9 @@ func newTimeouter(t time.Duration, do func()) (chan<- bool, chan<- bool) {
 }
 
 type serve struct {
-	serverHost        string
-	serverPort        string
-	key               string
-	session           []byte
-	nextUpdateTime    uint16
-	updateSessionLock bool
-}
-
-func (s *serve) updateSessionLoop() {
-	for {
-		time.Sleep(time.Second * time.Duration(s.nextUpdateTime))
-		err := s.updateSession()
-		if err != nil {
-			log.Println(err)
-		}
-	}
-}
-
-func (s *serve) updateSession() error {
-	if s.updateSessionLock {
-		return nil
-	}
-	s.updateSessionLock = true
-	defer func() { s.updateSessionLock = false }()
-
-	/*
-		+------+---------+----------+
-		| TYPE | KEY LEN | KEY      |
-		+------+---------+----------+
-		| 1    | 2       | Variable |
-		+------+---------+----------+
-
-		- TYPE: 请求类型。0为session请求，1为代理请求
-		- KEY LEN: KEY的长度，使用大端字节序，uint16
-		- KEY: 身份验证用的KEY。字符串
-	*/
-	buf := bytes.NewBuffer([]byte{0})
-	err := binary.Write(buf, binary.BigEndian, uint16(len(s.key)))
-	if err != nil {
-		return err
-	}
-	_, err = buf.WriteString(s.key)
-	if err != nil {
-		return err
-	}
-
-	conn, err := aestcp.Dial("tcp", s.serverHost+":"+s.serverPort, []byte(s.key))
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	request := buf.Bytes()
-	_, err = conn.Write(request)
-	if err != nil {
-		return err
-	}
-
-	/*
-		+------+---------+-----+
-		| CODE | SESSION | NPT |
-		+------+---------+-----+
-		| 1    | 64      | 2   |
-		+------+---------+-----+
-
-		- CODE: 状态码。0为成功，1为KEY验证失败
-		- SESSION: 代理请求时使用的session。随机的64位字节
-		- NPT: 多少秒后更新session，使用大端字节序，uint16
-	*/
-	buffer := make([]byte, 67)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		return err
-	}
-	if n != 67 {
-		return errors.New("服务端应答长度非法")
-	}
-	if buffer[0] != 0 {
-		return errors.New("KEY 验证失败")
-	}
-
-	s.session = buffer[1:65]
-	s.nextUpdateTime = binary.BigEndian.Uint16(buffer[65:])
-	log.Println("Session 更新完成，下次更新时间:",
-		time.Unix(time.Now().Unix()+int64(s.nextUpdateTime), 0).
-			Format("2006/01/02 15:04:05"))
-	return nil
+	serverHost string
+	serverPort string
+	key        string
 }
 
 func (s *serve) handleConnection(conn net.Conn) {
@@ -342,22 +249,18 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 		return
 	}
 	/*
-		+------+---------+-----+----------+----------+------+
-		| TYPE | SESSION | CMD | HOST LEN | HOST     | PORT |
-		+------+---------+-----+----------+----------+------+
-		| 1    | 64      | 1   | 1        | Variable | 2    |
-		+------+---------+-----+----------+----------+------+
+		+-----+----------+----------+------+
+		| CMD | HOST LEN | HOST     | PORT |
+		+-----+----------+----------+------+
+		| 1   | 1        | Variable | 2    |
+		+-----+----------+----------+------+
 
-		- TYPE: 请求类型。0为session请求，1为代理请求
-		- SESSION: 身份验证用session，随机的64位字节
 		- CMD: 协议类型。0为TCP，1为UDP
 		- HOST LEN: 目标地址的长度
 		- HOST: 目标地址，IPv[4|6]或者域名
-		- PORT: 目标端口，使用大端字节序
+		- PORT: 目标端口，使用大端字节序，uint16
 	*/
-	buffer := bytes.NewBuffer([]byte{1})
-	buffer.Write(s.session)
-	buffer.WriteByte(0)
+	buffer := bytes.NewBuffer([]byte{0})
 	byteHost := []byte(host)
 	buffer.WriteByte(byte(len(byteHost)))
 	buffer.Write(byteHost)
@@ -379,7 +282,7 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 		| 1    |
 		+------+
 
-		- CODE: 状态码。0为成功，2为session无效，[1|3-5]为socks5相应状态码
+		- CODE: 状态码。0为成功，[1|3-5]为socks5相应状态码
 	*/
 	// 读取服务端返回状态
 	buf := make([]byte, 1)
@@ -388,16 +291,6 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 		log.Println(err)
 		pconn.Close()
 		conn.Close()
-		return
-	}
-
-	// 检查session是否验证成功
-	if buf[0] == 2 {
-		log.Println("服务端验证失败")
-		pconn.Close()
-		conn.Close()
-		// 重新登录
-		s.updateSession()
 		return
 	}
 
@@ -453,21 +346,15 @@ func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 		return
 	}
 	/*
-		+------+---------+-----+
-		| TYPE | SESSION | CMD |
-		+------+---------+-----+
-		| 1    | 64      | 1   |
-		+------+---------+-----+
+		+-----+
+		| CMD |
+		+-----+
+		| 1   |
+		+-----+
 
-		- TYPE: 请求类型。0为session请求，1为代理请求
-		- SESSION: 身份验证用session，随机的64位字节
 		- CMD: 协议类型。0为TCP，1为UDP
 	*/
-	buffer := bytes.NewBuffer([]byte{1})
-	buffer.Write(s.session)
-	buffer.WriteByte(1)
-	request := buffer.Bytes()
-	_, err = pconn.Write(request)
+	_, err = pconn.Write([]byte{1})
 	if err != nil {
 		log.Println(err)
 		pconn.Close()
@@ -491,16 +378,6 @@ func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 		log.Println(err)
 		pconn.Close()
 		conn.Close()
-		return
-	}
-
-	// 检查session是否验证成功
-	if buf[0] == 2 {
-		log.Println("服务端验证失败")
-		pconn.Close()
-		conn.Close()
-		// 重新登录
-		s.updateSession()
 		return
 	}
 
@@ -530,7 +407,7 @@ func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 		pconn.Close()
 		return
 	}
-	buffer = bytes.NewBuffer([]byte{5, code, 0})
+	buffer := bytes.NewBuffer([]byte{5, code, 0})
 	lAddr := conn.LocalAddr().String()
 	lAddr = lAddr[:strings.LastIndex(lAddr, ":")]
 	if ipv4Reg.MatchString(lAddr) {
