@@ -31,6 +31,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Bluek404/Stepladder/aestcp"
@@ -38,7 +39,7 @@ import (
 	"github.com/Unknwon/goconfig"
 )
 
-const VERSION = "3.0.0"
+const VERSION = "3.1.0"
 
 func main() {
 	// 读取配置文件
@@ -156,12 +157,13 @@ func (s *serve) handleConnection(conn net.Conn) {
 }
 
 func (s *serve) proxyTCP(conn net.Conn) {
+	defer conn.Close()
+
 	// 读取host长度
 	buf := make([]byte, 1)
 	_, err := conn.Read(buf)
 	if err != nil {
 		log.Println(err)
-		conn.Close()
 		return
 	}
 	hostLen := int(buf[0])
@@ -170,12 +172,10 @@ func (s *serve) proxyTCP(conn net.Conn) {
 	n, err := conn.Read(buf)
 	if err != nil {
 		log.Println(err)
-		conn.Close()
 		return
 	}
 	if n != hostLen {
 		log.Println("host长度错误")
-		conn.Close()
 		return
 	}
 	host := string(buf)
@@ -184,7 +184,6 @@ func (s *serve) proxyTCP(conn net.Conn) {
 	err = binary.Read(conn, binary.BigEndian, &port)
 	if err != nil {
 		log.Println(err)
-		conn.Close()
 		return
 	}
 
@@ -210,29 +209,30 @@ func (s *serve) proxyTCP(conn net.Conn) {
 		log.Println(conn.RemoteAddr(), "<=tcp==", url, "[×]")
 		// 给客户端返回错误信息
 		conn.Write([]byte{3})
-		conn.Close()
 		return
 	}
+	defer pconn.Close()
+
 	_, err = conn.Write([]byte{0})
 	if err != nil {
 		log.Println(err)
-		conn.Close()
 		return
 	}
 
-	// 两个conn互相传输信息
+	wg := new(sync.WaitGroup)
+	wg.Add(2)
 	go func() {
 		Copy(conn, pconn)
-		conn.Close()
-		pconn.Close()
 		log.Println(conn.RemoteAddr(), "==tcp=>", url, "[√]")
+		wg.Done()
 	}()
 	go func() {
 		Copy(pconn, conn)
-		pconn.Close()
-		conn.Close()
 		log.Println(conn.RemoteAddr(), "<=tcp==", url, "[√]")
+		wg.Done()
 	}()
+
+	wg.Wait()
 }
 
 func (s *serve) proxyUDP(conn net.Conn) {

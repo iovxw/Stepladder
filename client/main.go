@@ -33,6 +33,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Bluek404/Stepladder/aestcp"
@@ -40,7 +41,7 @@ import (
 	"github.com/Unknwon/goconfig"
 )
 
-const VERSION = "3.0.0"
+const VERSION = "3.1.0"
 
 const (
 	verSocks5 = 0x05
@@ -307,7 +308,6 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 	_, err = conn.Write([]byte{5, code, 0, 1, 0, 0, 0, 0, 0, 0})
 	if err != nil {
 		log.Println(err)
-		conn.Close()
 		return
 	}
 
@@ -316,24 +316,24 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 	if code != 0 {
 		log.Println(conn.RemoteAddr(), "==tcp=>", host, "[×]")
 		log.Println(conn.RemoteAddr(), "<=tcp==", host, "[×]")
-		conn.Close()
-		pconn.Close()
 		return
 	}
 
+	wg := new(sync.WaitGroup)
+	wg.Add(2)
 	go func() {
 		Copy(conn, pconn)
-		conn.Close()
-		pconn.Close()
 		log.Println(conn.RemoteAddr(), "==tcp=>", host, "[√]")
+		wg.Done()
 	}()
 
 	go func() {
 		Copy(pconn, conn)
-		conn.Close()
-		pconn.Close()
 		log.Println(conn.RemoteAddr(), "<=tcp==", host, "[√]")
+		wg.Done()
 	}()
+
+	wg.Wait()
 }
 
 func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
