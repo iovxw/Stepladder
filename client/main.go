@@ -41,7 +41,7 @@ import (
 	"github.com/Unknwon/goconfig"
 )
 
-const VERSION = "3.1.0"
+const VERSION = "3.1.1"
 
 const (
 	verSocks5 = 0x05
@@ -180,6 +180,7 @@ type serve struct {
 
 func (s *serve) handleConnection(conn net.Conn) {
 	log.Println("[+]", conn.RemoteAddr())
+	defer log.Println("[-]", conn.RemoteAddr())
 
 	// socks5握手部分，具体参见 RFC1928
 	var buf = make([]byte, 1+1+255)
@@ -241,7 +242,7 @@ func (s *serve) handleConnection(conn net.Conn) {
 }
 
 func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
-	log.Println(conn.RemoteAddr(), "<=tcp=>", host+":"+strconv.Itoa(int(port)), "[+]")
+	log.Println(conn.RemoteAddr(), "==tcp==", host+":"+strconv.Itoa(int(port)), "[+]")
 	// 与服务端建立链接
 	pconn, err := aestcp.Dial("tcp", s.serverHost+":"+s.serverPort, []byte(s.key))
 	if err != nil {
@@ -308,36 +309,41 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 	_, err = conn.Write([]byte{5, code, 0, 1, 0, 0, 0, 0, 0, 0})
 	if err != nil {
 		log.Println(err)
+		pconn.Close()
+		conn.Close()
 		return
 	}
 
 	// 检查状态码
 	// 放在这里是因为要先回应消息
 	if code != 0 {
-		log.Println(conn.RemoteAddr(), "==tcp=>", host, "[×]")
-		log.Println(conn.RemoteAddr(), "<=tcp==", host, "[×]")
+		log.Println(conn.RemoteAddr(), "==tcp==", host, "[×]")
+		pconn.Close()
+		conn.Close()
 		return
 	}
 
 	wg := new(sync.WaitGroup)
 	wg.Add(2)
 	go func() {
-		Copy(conn, pconn)
-		log.Println(conn.RemoteAddr(), "==tcp=>", host, "[√]")
+		Copy(pconn, conn)
+		pconn.Close()
+		conn.Close()
 		wg.Done()
 	}()
-
 	go func() {
-		Copy(pconn, conn)
-		log.Println(conn.RemoteAddr(), "<=tcp==", host, "[√]")
+		Copy(conn, pconn)
+		pconn.Close()
+		conn.Close()
 		wg.Done()
 	}()
 
 	wg.Wait()
+	log.Println(conn.RemoteAddr(), "==tcp==", host, "[√]")
 }
 
 func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
-	log.Println(conn.RemoteAddr(), "<=udp=>", "ALL", "[+]")
+	log.Println(conn.RemoteAddr(), "==udp==", "ALL", "[+]")
 	// 与服务端建立链接
 	pconn, err := aestcp.Dial("tcp", s.serverHost+":"+s.serverPort, []byte(s.key))
 	if err != nil {
@@ -392,7 +398,7 @@ func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 
 	// 检查状态码
 	if code != 0 {
-		log.Println(conn.RemoteAddr(), "<=udp=>", "ALL", "[×]")
+		log.Println(conn.RemoteAddr(), "==udp==", "ALL", "[×]")
 		conn.Write([]byte{5, code, 0, 1, 0, 0, 0, 0, 0, 0})
 		conn.Close()
 		pconn.Close()
@@ -461,6 +467,8 @@ func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 		uconn.Close()
 	})
 
+	wg := new(sync.WaitGroup)
+	wg.Add(2)
 	go func() {
 		for {
 			buf := make([]byte, 4)
@@ -514,12 +522,11 @@ func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 				break
 			}
 		}
-		log.Println(conn.RemoteAddr(), "==udp=>", "ALL", "[√]")
 		pconn.Close()
 		uconn.Close()
+		wg.Done()
 		exit <- true
 	}()
-
 	go func() {
 		for {
 			/*
@@ -590,11 +597,14 @@ func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 				break
 			}
 		}
-		log.Println(conn.RemoteAddr(), "<=udp==", "ALL", "[√]")
 		pconn.Close()
 		uconn.Close()
+		wg.Done()
 		exit <- true
 	}()
+
+	wg.Wait()
+	log.Println(conn.RemoteAddr(), "==udp==", "ALL", "[√]")
 }
 
 func Copy(dst io.Writer, src io.Reader) (written int64, err error) {

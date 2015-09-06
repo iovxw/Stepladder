@@ -39,7 +39,7 @@ import (
 	"github.com/Unknwon/goconfig"
 )
 
-const VERSION = "3.1.0"
+const VERSION = "3.1.1"
 
 func main() {
 	// 读取配置文件
@@ -117,6 +117,7 @@ type serve struct {
 
 func (s *serve) handleConnection(conn net.Conn) {
 	log.Println("[+]", conn.RemoteAddr())
+	defer log.Println("[-]", conn.RemoteAddr())
 
 	/*
 		两种可能的请求:
@@ -157,13 +158,12 @@ func (s *serve) handleConnection(conn net.Conn) {
 }
 
 func (s *serve) proxyTCP(conn net.Conn) {
-	defer conn.Close()
-
 	// 读取host长度
 	buf := make([]byte, 1)
 	_, err := conn.Read(buf)
 	if err != nil {
 		log.Println(err)
+		conn.Close()
 		return
 	}
 	hostLen := int(buf[0])
@@ -172,6 +172,7 @@ func (s *serve) proxyTCP(conn net.Conn) {
 	n, err := conn.Read(buf)
 	if err != nil {
 		log.Println(err)
+		conn.Close()
 		return
 	}
 	if n != hostLen {
@@ -184,13 +185,14 @@ func (s *serve) proxyTCP(conn net.Conn) {
 	err = binary.Read(conn, binary.BigEndian, &port)
 	if err != nil {
 		log.Println(err)
+		conn.Close()
 		return
 	}
 
 	url := host + ":" + strconv.Itoa(int(port))
 
 	// 输出信息
-	log.Println(conn.RemoteAddr(), "<=tcp=>", url, "[+]")
+	log.Println(conn.RemoteAddr(), "==tcp==", url, "[+]")
 
 	/*
 		+------+
@@ -205,34 +207,38 @@ func (s *serve) proxyTCP(conn net.Conn) {
 	pconn, err := net.Dial("tcp", url)
 	if err != nil {
 		log.Println(err)
-		log.Println(conn.RemoteAddr(), "==tcp=>", url, "[×]")
-		log.Println(conn.RemoteAddr(), "<=tcp==", url, "[×]")
+		log.Println(conn.RemoteAddr(), "==tcp==", url, "[×]")
 		// 给客户端返回错误信息
 		conn.Write([]byte{3})
+		conn.Close()
 		return
 	}
-	defer pconn.Close()
 
 	_, err = conn.Write([]byte{0})
 	if err != nil {
 		log.Println(err)
+		conn.Close()
+		pconn.Close()
 		return
 	}
 
 	wg := new(sync.WaitGroup)
 	wg.Add(2)
 	go func() {
-		Copy(conn, pconn)
-		log.Println(conn.RemoteAddr(), "==tcp=>", url, "[√]")
+		Copy(pconn, conn)
+		conn.Close()
+		pconn.Close()
 		wg.Done()
 	}()
 	go func() {
-		Copy(pconn, conn)
-		log.Println(conn.RemoteAddr(), "<=tcp==", url, "[√]")
+		Copy(conn, pconn)
+		conn.Close()
+		pconn.Close()
 		wg.Done()
 	}()
 
 	wg.Wait()
+	log.Println(conn.RemoteAddr(), "==tcp==", url, "[√]")
 }
 
 func (s *serve) proxyUDP(conn net.Conn) {
@@ -250,13 +256,15 @@ func (s *serve) proxyUDP(conn net.Conn) {
 		conn.Close()
 		return
 	}
-	log.Println(conn.RemoteAddr(), "<=udp=>", "ALL", "[+]")
+	log.Println(conn.RemoteAddr(), "==udp==", "ALL", "[+]")
 
 	alive, exit := newTimeouter(time.Minute*1, func() {
 		pconn.Close()
 		conn.Close()
 	})
 
+	wg := new(sync.WaitGroup)
+	wg.Add(2)
 	go func() {
 		for {
 			/*
@@ -308,12 +316,11 @@ func (s *serve) proxyUDP(conn net.Conn) {
 			}
 			pconn.WriteToUDP(buf[:n], addr)
 		}
-		log.Println(conn.RemoteAddr(), "==udp=>", "ALL", "[√]")
 		pconn.Close()
 		conn.Close()
+		wg.Done()
 		exit <- true
 	}()
-
 	go func() {
 		for {
 			buf := make([]byte, 4096)
@@ -352,11 +359,14 @@ func (s *serve) proxyUDP(conn net.Conn) {
 				break
 			}
 		}
-		log.Println(conn.RemoteAddr(), "<=udp==", "ALL", "[√]")
 		pconn.Close()
 		conn.Close()
+		wg.Done()
 		exit <- true
 	}()
+
+	wg.Wait()
+	log.Println(conn.RemoteAddr(), "==udp==", "ALL", "[√]")
 }
 
 func Copy(dst io.Writer, src io.Reader) (written int64, err error) {
