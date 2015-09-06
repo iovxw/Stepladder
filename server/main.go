@@ -27,60 +27,49 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"flag"
 	"io"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/Bluek404/Stepladder/aestcp"
-
-	"github.com/Unknwon/goconfig"
 )
 
-const VERSION = "3.1.1"
+const VERSION = "3.2.0"
 
 func main() {
-	// 读取配置文件
-	cfg, err := goconfig.LoadConfigFile("server.ini")
-	if err != nil {
-		log.Println("配置文件加载失败，自动重置配置文件", err)
-		cfg, err = goconfig.LoadFromData([]byte{})
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	}
+	var key string
+	var port int
+	flag.StringVar(&key, "k", "eGauUecvzS05U5DIsxAN4n2hadmRTZGB", "key")
+	flag.IntVar(&port, "p", 8081, "port")
+	flag.Parse()
 
-	var (
-		key, ok1  = cfg.MustValueSet("client", "key", "eGauUecvzS05U5DIsxAN4n2hadmRTZGBqNd2zsCkrvwEBbqoITj36mAMk4Unw6Pr")
-		port, ok2 = cfg.MustValueSet("server", "port", "8081")
-	)
-
-	// 如果缺少配置则保存为默认配置
-	if ok1 || ok2 {
-		err = goconfig.SaveConfigFile(cfg, "server.ini")
-		if err != nil {
-			log.Println("配置文件保存失败:", err)
-		}
+	keyB := []byte(key)
+	switch len(keyB) {
+	case 16, 32, 64:
+		break
+	default:
+		log.Println("KEY 长度必须为 16、32 或者 64")
+		os.Exit(1)
 	}
 
 	// 监听端口
-	ln, err := aestcp.Listen("tcp", ":"+port, []byte(key))
+	ln, err := aestcp.Listen("tcp", ":"+strconv.Itoa(port), keyB)
 	if err != nil {
 		log.Println(err)
-		return
+		os.Exit(1)
 	}
 	defer ln.Close()
 
-	s := &serve{key: key}
-
 	// 加载完成后输出配置信息
 	log.Println("|>>>>>>>>>>>>>>>|<<<<<<<<<<<<<<<|")
-	log.Println("程序版本:" + VERSION)
-	log.Println("监听端口:" + port)
-	log.Println("Key:" + key)
+	log.Println("程序版本:", VERSION)
+	log.Println("监听端口:", port)
+	log.Println("Key:", key)
 	log.Println("|>>>>>>>>>>>>>>>|<<<<<<<<<<<<<<<|")
 
 	for {
@@ -89,7 +78,7 @@ func main() {
 			log.Println(err)
 			continue
 		}
-		go s.handleConnection(conn)
+		go handleConnection(conn)
 	}
 }
 
@@ -111,11 +100,7 @@ func newTimeouter(t time.Duration, do func()) (chan<- bool, chan<- bool) {
 	return alive, exit
 }
 
-type serve struct {
-	key string
-}
-
-func (s *serve) handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn) {
 	log.Println("[+]", conn.RemoteAddr())
 	defer log.Println("[-]", conn.RemoteAddr())
 
@@ -151,13 +136,13 @@ func (s *serve) handleConnection(conn net.Conn) {
 		return
 	}
 	if buf[0] == 0 {
-		s.proxyTCP(conn)
+		proxyTCP(conn)
 	} else {
-		s.proxyUDP(conn)
+		proxyUDP(conn)
 	}
 }
 
-func (s *serve) proxyTCP(conn net.Conn) {
+func proxyTCP(conn net.Conn) {
 	// 读取host长度
 	buf := make([]byte, 1)
 	_, err := conn.Read(buf)
@@ -241,7 +226,7 @@ func (s *serve) proxyTCP(conn net.Conn) {
 	log.Println(conn.RemoteAddr(), "==tcp==", url, "[√]")
 }
 
-func (s *serve) proxyUDP(conn net.Conn) {
+func proxyUDP(conn net.Conn) {
 	pconn, err := net.ListenUDP("udp", nil)
 	if err != nil {
 		log.Println(err)

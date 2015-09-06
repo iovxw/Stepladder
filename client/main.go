@@ -30,6 +30,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -41,7 +42,7 @@ import (
 	"github.com/Unknwon/goconfig"
 )
 
-const VERSION = "3.1.1"
+const VERSION = "3.2.0"
 
 const (
 	verSocks5 = 0x05
@@ -65,43 +66,49 @@ func main() {
 		cfg, err = goconfig.LoadFromData([]byte{})
 		if err != nil {
 			log.Println(err)
-			return
+			os.Exit(1)
 		}
 	}
 
 	var (
 		port, ok1       = cfg.MustValueSet("client", "port", "7071")
-		key, ok2        = cfg.MustValueSet("client", "key", "eGauUecvzS05U5DIsxAN4n2hadmRTZGBqNd2zsCkrvwEBbqoITj36mAMk4Unw6Pr")
-		serverHost, ok3 = cfg.MustValueSet("server", "host", "localhost")
-		serverPort, ok4 = cfg.MustValueSet("server", "port", "8081")
+		key, ok2        = cfg.MustValueSet("server", "key", "eGauUecvzS05U5DIsxAN4n2hadmRTZGB")
+		serverHost, ok3 = cfg.MustValueSet("server", "host", "localhost:8081")
 	)
 
 	// 如果缺少配置则保存为默认配置
-	if ok1 || ok2 || ok3 || ok4 {
+	if ok1 || ok2 || ok3 {
 		err = goconfig.SaveConfigFile(cfg, "client.ini")
 		if err != nil {
 			log.Println("配置文件保存失败:", err)
 		}
 	}
+	keyB := []byte(key)
+	switch len(keyB) {
+	case 16, 32, 64:
+		break
+	default:
+		log.Println("KEY 长度必须为 16、32 或者 64")
+		os.Exit(1)
+	}
 
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		log.Println(err)
-		return
+		os.Exit(1)
 	}
 	defer ln.Close()
 
 	log.Println("|>>>>>>>>>>>>>>>|<<<<<<<<<<<<<<<|")
-	log.Println("程序版本:" + VERSION)
-	log.Println("代理端口:" + port)
-	log.Println("Key:" + key)
-	log.Println("服务器地址:" + serverHost + ":" + serverPort)
+	log.Println("程序版本:", VERSION)
+	log.Println("代理端口:", port)
+	log.Println("Key:", key)
+	log.Println("服务器地址:", serverHost)
 	log.Println("|>>>>>>>>>>>>>>>|<<<<<<<<<<<<<<<|")
 
 	s := &serve{
 		serverHost: serverHost,
-		serverPort: serverPort,
-		key:        key,
+		key:        keyB,
 	}
 
 	for {
@@ -174,8 +181,7 @@ func newTimeouter(t time.Duration, do func()) (chan<- bool, chan<- bool) {
 
 type serve struct {
 	serverHost string
-	serverPort string
-	key        string
+	key        []byte
 }
 
 func (s *serve) handleConnection(conn net.Conn) {
@@ -244,7 +250,7 @@ func (s *serve) handleConnection(conn net.Conn) {
 func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 	log.Println(conn.RemoteAddr(), "==tcp==", host+":"+strconv.Itoa(int(port)), "[+]")
 	// 与服务端建立链接
-	pconn, err := aestcp.Dial("tcp", s.serverHost+":"+s.serverPort, []byte(s.key))
+	pconn, err := aestcp.Dial("tcp", s.serverHost, s.key)
 	if err != nil {
 		log.Println("连接服务端失败:", err)
 		conn.Close()
@@ -345,7 +351,7 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 	log.Println(conn.RemoteAddr(), "==udp==", "ALL", "[+]")
 	// 与服务端建立链接
-	pconn, err := aestcp.Dial("tcp", s.serverHost+":"+s.serverPort, []byte(s.key))
+	pconn, err := aestcp.Dial("tcp", s.serverHost, s.key)
 	if err != nil {
 		log.Println("连接服务端失败:", err)
 		conn.Close()
