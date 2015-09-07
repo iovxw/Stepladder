@@ -262,9 +262,9 @@ func (s *serve) handleConnection(conn net.Conn) {
 }
 
 func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
-	log.Println(conn.RemoteAddr(), "==tcp==", host+":"+strconv.Itoa(int(port)), "[+]")
 	// 与服务端建立链接
 	server := <-s.getServer
+	log.Println("[TCP]", conn.RemoteAddr(), server.host, host+":"+strconv.Itoa(int(port)), "[+]")
 	pconn, err := aestcp.Dial("tcp", server.host, server.key)
 	if err != nil {
 		log.Println("连接服务端失败:", err)
@@ -338,7 +338,7 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 	// 检查状态码
 	// 放在这里是因为要先回应消息
 	if code != 0 {
-		log.Println(conn.RemoteAddr(), "==tcp==", host, "[×]")
+		log.Println("[TCP]", conn.RemoteAddr(), server.host, host+":"+strconv.Itoa(int(port)), "[×]")
 		pconn.Close()
 		conn.Close()
 		return
@@ -360,13 +360,13 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 	}()
 
 	wg.Wait()
-	log.Println(conn.RemoteAddr(), "==tcp==", host, "[√]")
+	log.Println("[TCP]", conn.RemoteAddr(), server.host, host+":"+strconv.Itoa(int(port)), "[√]")
 }
 
 func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
-	log.Println(conn.RemoteAddr(), "==udp==", "ALL", "[+]")
 	// 与服务端建立链接
 	server := <-s.getServer
+	log.Println("[UDP]", conn.RemoteAddr(), server.host, "*", "[+]")
 	pconn, err := aestcp.Dial("tcp", server.host, server.key)
 	if err != nil {
 		log.Println("连接服务端失败:", err)
@@ -420,7 +420,7 @@ func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 
 	// 检查状态码
 	if code != 0 {
-		log.Println(conn.RemoteAddr(), "==udp==", "ALL", "[×]")
+		log.Println("[UDP]", conn.RemoteAddr(), server.host, "*", "[×]")
 		conn.Write([]byte{5, code, 0, 1, 0, 0, 0, 0, 0, 0})
 		conn.Close()
 		pconn.Close()
@@ -626,7 +626,7 @@ func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 	}()
 
 	wg.Wait()
-	log.Println(conn.RemoteAddr(), "==udp==", "ALL", "[√]")
+	log.Println("[UDP]", conn.RemoteAddr(), server.host, "*", "[√]")
 }
 
 func Copy(dst io.Writer, src io.Reader) (written int64, err error) {
