@@ -39,7 +39,7 @@ import (
 	"github.com/Bluek404/Stepladder/aestcp"
 )
 
-const VERSION = "3.2.0"
+const VERSION = "3.3.0"
 
 func main() {
 	var key string
@@ -67,8 +67,8 @@ func main() {
 
 	// 加载完成后输出配置信息
 	log.Println("|>>>>>>>>>>>>>>>|<<<<<<<<<<<<<<<|")
-	log.Println("程序版本:", VERSION)
-	log.Println("监听端口:", port)
+	log.Println("Version:", VERSION)
+	log.Println("Port:", port)
 	log.Println("Key:", key)
 	log.Println("|>>>>>>>>>>>>>>>|<<<<<<<<<<<<<<<|")
 

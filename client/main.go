@@ -39,10 +39,10 @@ import (
 
 	"github.com/Bluek404/Stepladder/aestcp"
 
-	"github.com/Unknwon/goconfig"
+	"github.com/BurntSushi/toml"
 )
 
-const VERSION = "3.2.0"
+const VERSION = "3.3.0"
 
 const (
 	verSocks5 = 0x05
@@ -58,41 +58,45 @@ const (
 
 var ipv4Reg = regexp.MustCompile(`(?:[0-9]+\.){3}[0-9]+`)
 
+type config struct {
+	Port    int `toml:"port"`
+	Servers []struct {
+		Host string `toml:"host"`
+		Key  string `toml:"key"`
+	} `toml:"server"`
+}
+
 func main() {
-	// 加载配置文件
-	cfg, err := goconfig.LoadConfigFile("client.ini")
+	var cfg config
+	_, err := toml.DecodeFile("./client.toml", &cfg)
 	if err != nil {
-		log.Println("配置文件加载失败，自动重置配置文件:", err)
-		cfg, err = goconfig.LoadFromData([]byte{})
-		if err != nil {
-			log.Println(err)
-			os.Exit(1)
-		}
+		log.Println(err)
+		os.Exit(1)
 	}
-
-	var (
-		port, ok1       = cfg.MustValueSet("client", "port", "7071")
-		key, ok2        = cfg.MustValueSet("server", "key", "eGauUecvzS05U5DIsxAN4n2hadmRTZGB")
-		serverHost, ok3 = cfg.MustValueSet("server", "host", "localhost:8081")
-	)
-
-	// 如果缺少配置则保存为默认配置
-	if ok1 || ok2 || ok3 {
-		err = goconfig.SaveConfigFile(cfg, "client.ini")
-		if err != nil {
-			log.Println("配置文件保存失败:", err)
-		}
-	}
-	keyB := []byte(key)
-	switch len(keyB) {
-	case 16, 32, 64:
-		break
-	default:
-		log.Println("KEY 长度必须为 16、32 或者 64")
+	if len(cfg.Servers) == 0 {
+		log.Println("无法从配置文件中读取服务器列表")
 		os.Exit(1)
 	}
 
-	ln, err := net.Listen("tcp", ":"+port)
+	s := serve{
+		getServer: make(chan serverInfo),
+		servers:   []serverInfo{},
+	}
+
+	for _, server := range cfg.Servers {
+		keyB := []byte(server.Key)
+		switch len(keyB) {
+		case 16, 32, 64:
+			break
+		default:
+			log.Println("KEY 长度必须为 16、32 或者 64")
+			os.Exit(1)
+		}
+		s.servers = append(s.servers, serverInfo{server.Host, keyB})
+	}
+	go s.getServerLoop()
+
+	ln, err := net.Listen("tcp", ":"+strconv.Itoa(cfg.Port))
 	if err != nil {
 		log.Println(err)
 		os.Exit(1)
@@ -100,16 +104,13 @@ func main() {
 	defer ln.Close()
 
 	log.Println("|>>>>>>>>>>>>>>>|<<<<<<<<<<<<<<<|")
-	log.Println("程序版本:", VERSION)
-	log.Println("代理端口:", port)
-	log.Println("Key:", key)
-	log.Println("服务器地址:", serverHost)
-	log.Println("|>>>>>>>>>>>>>>>|<<<<<<<<<<<<<<<|")
-
-	s := &serve{
-		serverHost: serverHost,
-		key:        keyB,
+	log.Println("Version:", VERSION)
+	log.Println("Port:", cfg.Port)
+	for i, server := range cfg.Servers {
+		log.Println("Server "+strconv.Itoa(i)+":", server.Host)
+		log.Println("Key "+strconv.Itoa(i)+":", server.Key)
 	}
+	log.Println("|>>>>>>>>>>>>>>>|<<<<<<<<<<<<<<<|")
 
 	for {
 		conn, err := ln.Accept()
@@ -179,9 +180,22 @@ func newTimeouter(t time.Duration, do func()) (chan<- bool, chan<- bool) {
 	return alive, exit
 }
 
+type serverInfo struct {
+	host string
+	key  []byte
+}
+
 type serve struct {
-	serverHost string
-	key        []byte
+	getServer chan serverInfo
+	servers   []serverInfo
+}
+
+func (s *serve) getServerLoop() {
+	for {
+		for _, server := range s.servers {
+			s.getServer <- server
+		}
+	}
 }
 
 func (s *serve) handleConnection(conn net.Conn) {
@@ -250,7 +264,8 @@ func (s *serve) handleConnection(conn net.Conn) {
 func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 	log.Println(conn.RemoteAddr(), "==tcp==", host+":"+strconv.Itoa(int(port)), "[+]")
 	// 与服务端建立链接
-	pconn, err := aestcp.Dial("tcp", s.serverHost, s.key)
+	server := <-s.getServer
+	pconn, err := aestcp.Dial("tcp", server.host, server.key)
 	if err != nil {
 		log.Println("连接服务端失败:", err)
 		conn.Close()
@@ -351,7 +366,8 @@ func (s *serve) proxyTCP(conn net.Conn, host string, port uint16) {
 func (s *serve) proxyUDP(conn net.Conn, host string, port uint16) {
 	log.Println(conn.RemoteAddr(), "==udp==", "ALL", "[+]")
 	// 与服务端建立链接
-	pconn, err := aestcp.Dial("tcp", s.serverHost, s.key)
+	server := <-s.getServer
+	pconn, err := aestcp.Dial("tcp", server.host, server.key)
 	if err != nil {
 		log.Println("连接服务端失败:", err)
 		conn.Close()
