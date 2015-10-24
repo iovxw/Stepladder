@@ -19,7 +19,7 @@ func listen() {
 		if err != nil {
 			panic(err)
 		}
-		_, err = conn.Write([]byte("Hello"))
+		_, err = conn.Write([]byte("Hello from server"))
 		if err != nil {
 			panic(err)
 		}
@@ -44,7 +44,7 @@ func dial() {
 		panic(err)
 	}
 	fmt.Println(string(buf[:n]))
-	_, err = conn.Write([]byte("OK"))
+	_, err = conn.Write([]byte("Hello from client"))
 	if err != nil {
 		panic(err)
 	}
@@ -54,4 +54,5 @@ func Test(t *testing.T) {
 	go listen()
 	time.Sleep(time.Second * 1)
 	dial()
+	time.Sleep(time.Second * 1)
 }
