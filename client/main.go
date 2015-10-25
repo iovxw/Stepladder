@@ -42,7 +42,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-const VERSION = "3.3.0"
+const VERSION = "4.0.0"
 
 const (
 	verSocks5 = 0x05
